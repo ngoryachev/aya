@@ -360,3 +360,20 @@ describe('precedents', () => {
     expect(c.team.decisions.list(project.id)).toHaveLength(1);
   });
 });
+
+describe('executor failures', () => {
+  it('lets the developer start the executor again after an aborted run', async () => {
+    start(); await c.runtime.settle();
+    await c.team.exec.sync(); await c.runtime.settle();
+    const [cand] = candidates();
+    c.team.decisions.classify(cand!.id, { pivotal: false, decider: { kind: 'owner' }, chosen: 'abort', comment: 'Окружение сломано' });
+    await c.team.exec.sync(); await c.runtime.settle();
+    const t = tasks()[0]!;
+    expect(t).toMatchObject({ status: 'blocked', executorStatus: 'aborted' });
+    const dev = c.team.agentByAlias(project.id, 'Даша');
+    const again = await c.team.exec.start(t.id, dev.id, 'Сделай задачу ещё раз');
+    expect(again.status).toBe('in_progress');
+    expect(again.executorRef).not.toBe(t.executorRef);
+    await expect(c.team.exec.start(t.id, dev.id, 'И ещё раз')).rejects.toThrow(/уже у исполнителя/);
+  });
+});

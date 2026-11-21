@@ -21,7 +21,8 @@ interface SdlcTask { id: string; status: string; prUrl: string | null }
 interface SdlcHil { id: string; kind: string; title: string; summary: string; payload: unknown; allowedDecisions: string[]; status: string }
 
 export class SdlcExecutor implements Executor {
-  constructor(private base: string, private token: string) {}
+  /** `model`: forces a model for every phase of the tasks started here (sdlc's own default applies when empty). */
+  constructor(private base: string, private token: string, private model: string | null = process.env.AYA_SDLC_MODEL || null) {}
 
   /** Reads the address and the token of the local sdlc server from its config. */
   static fromLocalConfig(home = process.env.SDLC_HOME ?? path.join(os.homedir(), '.sdlc')): SdlcExecutor {
@@ -41,7 +42,7 @@ export class SdlcExecutor implements Executor {
   }
 
   async start(input: { repoPath: string; title: string; prompt: string; pipeline?: string | null }) {
-    const t = await this.call<SdlcTask>('POST', '/tasks', { repoPath: input.repoPath, prompt: input.prompt, title: input.title, pipeline: input.pipeline ?? undefined });
+    const t = await this.call<SdlcTask>('POST', '/tasks', { repoPath: input.repoPath, prompt: input.prompt, title: input.title, pipeline: input.pipeline ?? undefined, modelOverrides: this.model ? { '*': { model: this.model } } : undefined });
     return { ref: t.id };
   }
 
@@ -59,6 +60,10 @@ export class SdlcExecutor implements Executor {
 const DECISION_LABELS: Record<string, string> = {
   approve: 'Одобрить', request_changes: 'Вернуть на доработку', abort: 'Прервать задачу', answer: 'Ответить',
   retry: 'Повторить фазу', resume: 'Продолжить', skip: 'Пропустить', allow: 'Разрешить', allow_session: 'Разрешить на сессию', deny: 'Запретить',
+};
+
+const KIND_TITLES: Record<string, string> = {
+  refine_prompt: 'уточнение постановки', approve_plan: 'план', approve_result: 'результат', question: 'вопрос исполнителя', escalation: 'сбой фазы', pr_feedback: 'замечания к PR',
 };
 
 export interface AnswerProposal extends CheckpointResponse {
@@ -89,12 +94,14 @@ export class ExecutorSync {
   async start(taskId: string, agentId: string, prompt: string, pipeline?: string | null): Promise<Task> {
     const { team } = this; const t = team.task(taskId); const p = team.project(t.projectId);
     if (!t.intake?.ready) throw new TeamError('сначала входной контроль: вызови task_intake и закрой пробелы, потом запускай исполнителя');
-    if (t.executorRef) throw new TeamError(`задача уже у исполнителя (${t.executorRef})`);
-    if (!team.isReady(t) && t.status !== 'in_progress') throw new TeamError('задача заблокирована зависимостями или уже не открыта');
+    // a run that failed or was aborted may be started again; a live one may not
+    const dead = ['failed', 'aborted', 'closed'].includes(t.executorStatus ?? '');
+    if (t.executorRef && !dead) throw new TeamError(`задача уже у исполнителя (${t.executorRef})`);
+    if (!team.isReady(t) && !(dead && (t.status === 'blocked' || t.status === 'in_progress'))) throw new TeamError('задача заблокирована зависимостями или уже не открыта');
     if (!p.repoPath) throw new TeamError('у проекта не задан репозиторий');
     const { ref } = await this.forProject(p.id).start({ repoPath: p.repoPath, title: t.title, prompt, pipeline: pipeline ?? p.pipeline });
     team.db.update('tasks', t.id, { executorRef: ref, executorStatus: 'created', updatedAt: now() });
-    team.emit({ type: 'executor.started', projectId: p.id, actor: { kind: 'agent', id: agentId }, taskId: t.id, summary: `«${t.title}» передана исполнителю (${p.executor}: ${ref})`, payload: { ref, pipeline: pipeline ?? p.pipeline } });
+    team.emit({ type: 'executor.started', projectId: p.id, actor: { kind: 'agent', id: agentId }, taskId: t.id, summary: `«${t.title}» ${dead ? 'заново ' : ''}передана исполнителю (${p.executor}: ${ref})`, payload: { ref, pipeline: pipeline ?? p.pipeline } });
     team.setTaskStatus(t.id, 'in_progress', { kind: 'agent', id: agentId });
     return team.task(t.id);
   }
@@ -118,7 +125,7 @@ export class ExecutorSync {
           if (team.db.one<Checkpoint>('checkpoints', 'executor_ref = ?', c.ref)) continue;
           const cp: Checkpoint = { id: newId('c'), projectId: t.projectId, taskId: t.id, executorRef: c.ref, kind: c.kind, title: c.title, summary: c.summary, payload: c.payload, allowed: c.allowed, status: 'open', decisionId: null, response: null, createdAt: now() };
           team.db.insert('checkpoints', cp);
-          team.emit({ type: 'checkpoint.opened', projectId: t.projectId, actor: SYSTEM, taskId: t.id, summary: `Чекпоинт исполнителя: ${c.title}`, payload: { checkpointId: cp.id, kind: c.kind } });
+          team.emit({ type: 'checkpoint.opened', projectId: t.projectId, actor: SYSTEM, taskId: t.id, summary: `Чекпоинт исполнителя (${KIND_TITLES[c.kind] ?? c.kind}): «${t.title}»`, payload: { checkpointId: cp.id, kind: c.kind } });
           const lead = team.lead(t.projectId) ?? (t.assigneeId ? team.agent(t.assigneeId) : undefined);
           if (lead) team.wake(lead.id, 'checkpoint', { checkpointId: cp.id }, `cp:${cp.id}`);
         }
@@ -146,7 +153,7 @@ export class ExecutorSync {
     const t = team.task(cp.taskId);
     const response: CheckpointResponse = { decision: a.decision, comment: a.comment, answers: a.answers, edited: a.edited };
     const d = team.decisions.propose({
-      projectId: cp.projectId, taskId: cp.taskId, agentId, title: `Чекпоинт «${cp.title}» по задаче «${t.title}»`,
+      projectId: cp.projectId, taskId: cp.taskId, agentId, title: `Чекпоинт исполнителя (${KIND_TITLES[cp.kind] ?? cp.kind}): «${t.title}»`,
       context: [cp.summary, a.comment ? `Комментарий к ответу: ${a.comment}` : '', a.answers ? `Ответы: ${JSON.stringify(a.answers)}` : ''].filter(Boolean).join('\n').slice(0, 4000),
       options: cp.allowed.map((k) => ({ key: k, label: DECISION_LABELS[k] ?? k })), recommendation: a.decision, rationale: a.rationale,
       klass: a.klass, reversible: a.reversible, importance: a.importance, confidence: a.confidence, proposedPivotal: a.proposedPivotal, proposedDecider: a.proposedDecider,

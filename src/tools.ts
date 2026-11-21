@@ -202,7 +202,7 @@ export const TOOLS: ToolDef[] = [
     handler: async ({ team, agent }, a) => { const m = await team.gateway.submitTracker({ agentId: agent.id, key: a.key, status: a.status, comment: a.comment, taskId: a.task_id ?? null }); return m.status === 'blocked' ? { not_sent: true, blocked_by_policy: m.violations } : { status: m.status }; },
   },
   {
-    name: 'executor_start', description: 'Передать задачу исполнителю (он пишет код, тестирует и открывает PR). Только после пройденного входного контроля. prompt: полная постановка для исполнителя, с учётом принятых решений.',
+    name: 'executor_start', description: 'Передать задачу исполнителю (он пишет код, тестирует и открывает PR). Только после пройденного входного контроля. Если прошлый запуск исполнителя упал или был прерван, этот вызов запускает его заново. prompt: полная постановка для исполнителя, с учётом принятых решений.',
     schema: { task_id: z.string(), prompt: z.string(), pipeline: z.string().optional() },
     handler: async ({ team, agent }, a) => { const t = team.task(a.task_id); if (t.assigneeId !== agent.id) throw new TeamError('задача назначена не тебе'); return { task: taskView(team, await team.exec.start(a.task_id, agent.id, a.prompt, a.pipeline)), next: 'Исполнитель работает. Заверши ход: тебя разбудят, когда он закончит.' }; },
   },

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './quiet.js';
 import os from 'node:os';
 import path from 'node:path';
 import { serve } from '@hono/node-server';
@@ -9,10 +10,6 @@ import { SdkRunner } from './sdk-runner.js';
 import { SdlcExecutor, type Executor } from './executor.js';
 import { createHttpApp, ensureToken } from './http.js';
 import { ensureBasics } from './seed.js';
-
-// node:sqlite is still marked experimental; the warning is noise in the service log
-const emitWarning = process.emitWarning.bind(process);
-process.emitWarning = ((w: string | Error, ...rest: unknown[]) => { if ((typeof w === 'string' ? w : w.message).includes('SQLite is an experimental feature')) return; (emitWarning as (...a: unknown[]) => void)(w, ...rest); }) as typeof process.emitWarning;
 
 function arg(name: string, def?: string): string | undefined { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : def; }
 
