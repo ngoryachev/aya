@@ -80,7 +80,7 @@ export function createHttpApp(team: Team, runtime: Runtime) {
     const tasks = team.tasks(projectId).map((t) => ({ ...t, dependsOn: team.deps(t.id), ready: team.isReady(t) }));
     const decisions = team.decisions.list(projectId).map((d) => ({ ...d, precedents: d.status === 'candidate' ? team.decisions.precedents(projectId, `${d.title} ${d.context}`, d.klass).filter((x) => x.decision.id !== d.id).map((x) => ({ id: x.decision.id, title: x.decision.title, chosen: x.decision.chosen, label: team.decisions.label(x.decision, x.decision.chosen ?? '') })) : [] }));
     const spent = agents.reduce((s, a) => s + a.costUsd, 0);
-    const ownerActions = db.query<{ n: number }>("SELECT COUNT(*) n FROM events WHERE project_id = ? AND actor_kind = 'owner'", projectId)[0]!.n;
+    const ownerActions = db.query<{ n: number }>("SELECT COUNT(*) n FROM events WHERE project_id = ? AND actor_kind = 'owner' AND type NOT IN ('project.created','agent.created','persona.created')", projectId)[0]!.n;
     const classified = decisions.filter((d) => d.classifiedBy === 'owner');
     const metrics = {
       spentUsd: spent, ownerActions,
