@@ -50,6 +50,7 @@ function defaultScripts(ctx: Ctx, opts: { gap?: boolean } = {}) {
     if (w.reason === 'decision_resolved') {
       const d = await call('decision_get', { decision_id: w.payload.decisionId });
       if (!d.task) return;
+      if ((await call('task_get', { task_id: d.task })).executor) return;   // a decision about work already handed over
       await call('task_intake', { task_id: d.task, ready: true, gaps: [] });
       await call('executor_start', { task_id: d.task, prompt: `Сделай задачу. Формат id: ${d.chosen}` });
     }
@@ -443,5 +444,34 @@ describe('stacked work', () => {
     expect(reworked).toEqual([api.id]);
     expect(c.team.task(api.id)).toMatchObject({ staleBase: false, status: 'in_progress' });
     expect(run('API').reworks[0]).toContain(`git merge ${model.branch}`);
+  });
+});
+
+describe('no silent stalls', () => {
+  it('tells the assignee about a decision on their task that somebody else asked for', async () => {
+    start({ gap: true }); await c.runtime.settle();
+    const t = tasks()[0]!; const pm = c.team.pm(project.id)!;
+    const seen: string[] = [];
+    const dev = c.runner.scripts.developer!;
+    c.runner.scripts.developer = async (w, call, spec) => { seen.push(w.reason); await dev(w, call, spec); };
+    for (const d of candidates()) c.team.decisions.cancel(d.id, { kind: 'owner' });
+    const d = c.team.decisions.propose({ projectId: project.id, taskId: t.id, agentId: pm.id, title: 'Формат вывода', context: '', options: [{ key: 'A', label: 'Текст' }, { key: 'B', label: 'JSON' }], recommendation: 'A', rationale: '', klass: 'api', reversible: false, importance: 'high', confidence: 0.5, proposedPivotal: true, proposedDecider: { kind: 'owner' } });
+    c.team.decisions.classify(d.id, { pivotal: true, decider: { kind: 'owner' }, chosen: 'B' });
+    await c.runtime.settle();
+    expect(seen).toContain('decision_resolved');
+    expect(c.team.task(t.id).executorRef).toBeTruthy();
+  });
+
+  it('reminds the assignee of a workable task nobody is moving', async () => {
+    start(); c.runner.scripts.developer = async () => {}; await c.runtime.settle();
+    const t = tasks()[0]!;
+    expect(c.team.nudgeStalled()).toHaveLength(0);                               // too early
+    const later = Date.now() + 11 * 60_000;
+    expect(c.team.nudgeStalled(undefined, undefined, later).map((x) => x.id)).toEqual([t.id]);
+    await c.runtime.settle();
+    expect(c.team.nudgeStalled(undefined, undefined, later + 60_000)).toHaveLength(0);   // not again right away
+    // a task waiting for a decision is not stalled
+    c.team.decisions.propose({ projectId: project.id, taskId: t.id, agentId: t.assigneeId!, title: 'Вопрос', context: '', options: [{ key: 'A', label: 'а' }, { key: 'B', label: 'б' }], recommendation: 'A', rationale: '', klass: 'product', reversible: true, importance: 'low', confidence: 0.5, proposedPivotal: false, proposedDecider: { kind: 'owner' } });
+    expect(c.team.nudgeStalled(undefined, undefined, later + 3_600_000)).toHaveLength(0);
   });
 });

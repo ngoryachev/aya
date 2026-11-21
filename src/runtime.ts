@@ -178,6 +178,7 @@ export class Runtime {
       case 'executor_finished': { const t = team.task(p.taskId); return `Исполнитель закончил задачу ${t.id} «${t.title}» (${p.status}).${p.prUrl ? ` PR: ${p.prUrl}` : ''} Задача переведена в verify и ждёт приёмки. Если по итогам есть что сообщить техлиду или записать в память, сделай это.`; }
       case 'executor_failed': { const t = team.task(p.taskId); return `Исполнитель не справился с задачей ${t.id} «${t.title}» (${p.status}). Задача заблокирована. Разберись в причине (executor_status) и сообщи техлиду (agent_message), что нужно для продолжения.`; }
       case 'base_changed': { const t = team.task(p.taskId); const b = team.task(p.baseTaskId); return `Твоя задача ${t.id} «${t.title}» начата от ветки задачи «${b.title}», а та была доработана. Верни свою задачу исполнителю (executor_rework), чтобы он подтянул изменения базовой ветки и проверил, что всё по-прежнему работает.`; }
+      case 'task_stalled': { const t = team.task(p.taskId); return `Твоя задача ${t.id} «${t.title}» открыта, готова к работе и давно стоит без движения. Посмотри её текущее состояние (task_get): описание могло измениться, по ней могли принять решения. Продолжи с того места, где остановилась работа: входной контроль, затем исполнитель. Если что-то мешает, оформи это решением или сообщи техлиду.`; }
       case 'owner_note': return `Сообщение от владельца${p.taskId ? ` по задаче ${p.taskId}` : ''}:\n\n${p.text}`;
       default: return `${w.reason}: ${JSON.stringify(p)}`;
     }
@@ -188,5 +189,5 @@ export const REASON_TITLES: Record<string, string> = {
   project_started: 'старт проекта', external_issue: 'задача из трекера', tasks_to_assign: 'назначение задач', task_assigned: 'новая задача', task_blocked: 'задача заблокирована',
   tasks_to_package: 'сбор пакета', dependents_review: 'пересмотр зависимых задач', decision_to_decide: 'принять решение', decision_send_package: 'пакет решения эксперту',
   decision_resolved: 'решение принято', decision_overridden: 'решение изменено владельцем', message_reply: 'ответ эксперта', message_rejected: 'сообщение отклонено',
-  agent_message: 'сообщение от коллеги', base_changed: 'базовая ветка изменилась', checkpoint: 'чекпоинт исполнителя', executor_finished: 'исполнитель закончил', executor_failed: 'исполнитель не справился', owner_note: 'сообщение владельца',
+  agent_message: 'сообщение от коллеги', base_changed: 'базовая ветка изменилась', task_stalled: 'задача стоит без движения', checkpoint: 'чекпоинт исполнителя', executor_finished: 'исполнитель закончил', executor_failed: 'исполнитель не справился', owner_note: 'сообщение владельца',
 };

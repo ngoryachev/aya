@@ -154,6 +154,7 @@ export class ExecutorSync {
         }
       }
       team.decisions.escalateStale();
+      team.nudgeStalled();
     } finally { this.busy = false; }
   }
 

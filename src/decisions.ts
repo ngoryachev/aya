@@ -126,7 +126,15 @@ export class Decisions {
     team.emit({ type: 'decision.resolved', projectId: d.projectId, actor: by, taskId: d.taskId, decisionId: d.id, summary: `Решение «${d.title}»: ${this.label(d, chosen)} (${team.actorName(by)}${opts.bySubstitute ? ', ИИ-подмена' : ''})`, payload: { chosen, comment, recommendationMatch: reinforcement.recommendationMatch, bySubstitute: !!opts.bySubstitute } });
     this.applyEffects(this.get(d.id), by);
     if (!opts.quiet) team.wake(d.agentId, 'decision_resolved', { decisionId: d.id }, `res:${d.id}`);
+    this.tellAssignee(d, 'decision_resolved');
     return this.get(d.id);
+  }
+
+  /** A decision about a task matters to whoever does the task, not only to whoever asked. */
+  private tellAssignee(d: Decision, reason: string) {
+    if (!d.taskId) return;
+    const t = this.team.db.get<{ assigneeId: string | null }>('tasks', d.taskId);
+    if (t?.assigneeId && t.assigneeId !== d.agentId) this.team.wake(t.assigneeId, reason, { decisionId: d.id }, `res:${d.id}:${reason}`);
   }
 
   label(d: Decision, key: string) { return d.options.find((o) => o.key === key)?.label ?? key; }
@@ -154,6 +162,7 @@ export class Decisions {
     team.emit({ type: 'intervention.override', projectId: d.projectId, actor: OWNER, taskId: d.taskId, decisionId: d.id, summary: `Владелец ${wasResolved ? 'изменил' : 'принял'} решение «${d.title}»: ${this.label(d, chosen)}`, payload: { chosen, previous: d.chosen, comment } });
     this.applyEffects(this.get(d.id), OWNER);
     team.wake(d.agentId, wasResolved ? 'decision_overridden' : 'decision_resolved', { decisionId: d.id }, `res:${d.id}:${chosen}`);
+    this.tellAssignee(d, wasResolved ? 'decision_overridden' : 'decision_resolved');
     return this.get(d.id);
   }
 

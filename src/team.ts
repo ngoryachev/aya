@@ -254,6 +254,28 @@ export class Team {
     return this.task(t.id);
   }
 
+  /**
+   * Safety net against a silent stall: an assigned task that could be worked on, with nothing pending around it
+   * (no open decision, no executor run, its assignee idle with an empty queue) and no movement for a while.
+   * The assignee is reminded, at most once per `everyMs`.
+   */
+  nudgeStalled(idleMs = 10 * 60_000, everyMs = 30 * 60_000, nowMs = Date.now()): Task[] {
+    const out: Task[] = [];
+    for (const t of this.db.all<Task>('tasks', "assignee_id IS NOT NULL AND taken_over = 0 AND executor_ref IS NULL AND status = 'open'")) {
+      if (!this.isReady(t) || this.project(t.projectId).status !== 'active') continue;
+      const a = this.db.get<Agent>('agents', t.assigneeId!); if (!a || a.status !== 'idle') continue;
+      if (this.db.query<{ n: number }>("SELECT COUNT(*) n FROM wakeups WHERE agent_id = ? AND status IN ('queued','running')", a.id)[0]!.n) continue;
+      if (this.db.query<{ n: number }>("SELECT COUNT(*) n FROM decisions WHERE task_id = ? AND status IN ('candidate','awaiting')", t.id)[0]!.n) continue;
+      const last = this.db.query<{ ts: string | null }>('SELECT MAX(ts) ts FROM events WHERE task_id = ?', t.id)[0]!.ts ?? t.updatedAt;
+      const nudged = this.db.query<{ ts: string | null }>("SELECT MAX(ts) ts FROM events WHERE task_id = ? AND type = 'task.nudged'", t.id)[0]!.ts;
+      if (nowMs - Date.parse(last) < idleMs || (nudged && nowMs - Date.parse(nudged) < everyMs)) continue;
+      this.emit({ type: 'task.nudged', projectId: t.projectId, actor: SYSTEM, taskId: t.id, summary: `«${t.title}» стоит без движения: ${a.alias} получает напоминание`, payload: { agentId: a.id } });
+      this.wake(a.id, 'task_stalled', { taskId: t.id }, `stall:${t.id}`);
+      out.push(t);
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------ memory
   appendMemory(scope: 'agent' | 'project', id: string, text: string, by: Actor) {
     const table = scope === 'agent' ? 'agents' : 'projects';
