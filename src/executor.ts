@@ -136,7 +136,8 @@ export class ExecutorSync {
           if (cp.decisionId) { const d = team.decisions.get(cp.decisionId); if (d.status !== 'resolved' && d.status !== 'cancelled') team.decisions.cancel(d.id, SYSTEM, 'чекпоинт закрыт вне команды'); }
           team.emit({ type: 'checkpoint.gone', projectId: t.projectId, actor: SYSTEM, taskId: t.id, summary: `Чекпоинт «${cp.title}» закрыт вне команды`, payload: { checkpointId: cp.id } });
         }
-        if (st.terminal) {
+        // a finished run that still asks something is not finished for the team
+        if (st.terminal && !st.checkpoints.length) {
           if (st.ok) { team.setTaskStatus(t.id, 'verify', SYSTEM, `исполнитель: ${st.status}`); if (t.assigneeId) team.wake(t.assigneeId, 'executor_finished', { taskId: t.id, prUrl: st.prUrl, status: st.status }, `fin:${t.id}`); }
           else { team.setTaskStatus(t.id, 'blocked', SYSTEM, `исполнитель: ${st.status}`); if (t.assigneeId) team.wake(t.assigneeId, 'executor_failed', { taskId: t.id, status: st.status }, `fail:${t.id}`); }
         }

@@ -18,7 +18,7 @@ await api('POST', '/personas', { name: 'Олег Петров', title: 'Архи
 await api('POST', '/personas', { name: 'Тестировщики', title: 'Канал тестирования', expertise: 'Приёмка готовых изменений', address: '#qa' });
 const project = await api('POST', '/projects', {
   name: 'wc-lite', repoPath, executor: 'sdlc', pipeline: 'standard', trackerProject: 'DEMO', budgetUsd: 25,
-  goal: 'В утилите wc-lite добавить флаг --lines: с ним утилита печатает число строк в файле вместо числа слов. Обновить README и тесты. Изменение маленькое: заведи его одной задачей.',
+  goal: process.env.AYA_E2E_GOAL ?? 'В утилите wc-lite добавить флаг --lines: с ним утилита печатает число строк в файле вместо числа слов. Обновить README и тесты. Изменение маленькое: заведи его одной задачей.',
 });
 log('project', project.id);
 
