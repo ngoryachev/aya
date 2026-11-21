@@ -377,3 +377,71 @@ describe('executor failures', () => {
     await expect(c.team.exec.start(t.id, dev.id, 'И ещё раз')).rejects.toThrow(/уже у исполнителя/);
   });
 });
+
+describe('stacked work', () => {
+  const approveAll = async () => { for (let i = 0; i < 6; i++) { await c.team.exec.sync(); await c.runtime.settle(); for (const d of candidates()) c.team.decisions.classify(d.id, { pivotal: false, decider: { kind: 'self' } }); await c.runtime.settle(); } };
+  const byTitle = (title: string) => tasks().find((t) => t.title === title)!;
+  const run = (title: string) => c.executor.tasks.get(byTitle(title).executorRef!)!;
+
+  it('starts a dependent task from the branch of its unmerged dependency', async () => {
+    start(); await c.runtime.settle();
+    await approveAll();
+    const model = byTitle('Модель данных'); const api = byTitle('API');
+    expect(model).toMatchObject({ status: 'verify', branch: `aya/${model.executorRef}`, baseTaskId: null });
+    expect(run('Модель данных').baseBranch).toBeNull();
+    expect(api.baseTaskId).toBe(model.id);
+    expect(run('API').baseBranch).toBe(model.branch);
+    expect(c.team.events({ projectId: project.id }).some((e) => e.type === 'executor.stacked')).toBe(true);
+  });
+
+  it('starts from the main branch once the dependency is merged', async () => {
+    start(); await c.runtime.settle();
+    const pm = c.team.pm(project.id)!; const dev = c.team.agentByAlias(project.id, 'Дима');
+    const a = c.team.createTask({ projectId: project.id, title: 'Слитая', description: '' }, { kind: 'agent', id: pm.id });
+    c.db.update('tasks', a.id, { status: 'done', branch: 'aya/merged' });
+    const b = c.team.createTask({ projectId: project.id, title: 'После слитой', description: '', dependsOn: [a.id] }, { kind: 'agent', id: pm.id });
+    expect(c.team.stackBase(c.team.task(b.id))).toBeNull();
+    c.team.recordIntake(b.id, dev.id, true, []);
+    const started = await c.team.exec.start(b.id, dev.id, 'x');
+    expect(c.executor.tasks.get(started.executorRef!)!.baseBranch).toBeNull();
+  });
+
+  it('waits when two unmerged dependencies are not a chain, and goes when they are', async () => {
+    start(); await c.runtime.settle();
+    const pm = { kind: 'agent' as const, id: c.team.pm(project.id)!.id };
+    const mk = (title: string, deps: string[] = []) => c.team.createTask({ projectId: project.id, title, description: '', dependsOn: deps, assigneeId: null }, pm);
+    c.runner.scripts = {};   // nobody picks these up: the test sets the states itself
+    const a = mk('Ветка А'); const b = mk('Ветка Б'); const both = mk('Нужны обе', [a.id, b.id]);
+    c.db.update('tasks', a.id, { status: 'verify', branch: 'aya/a' });
+    c.db.update('tasks', b.id, { status: 'verify', branch: 'aya/b' });
+    expect(c.team.stackBase(c.team.task(both.id))).toBeUndefined();
+    expect(c.team.isReady(c.team.task(both.id))).toBe(false);
+    // Б was itself started from А: its branch contains both
+    c.db.update('tasks', b.id, { baseTaskId: a.id });
+    expect(c.team.stackBase(c.team.task(both.id))!.id).toBe(b.id);
+    expect(c.team.isReady(c.team.task(both.id))).toBe(true);
+  });
+
+  it('notices that the base went back to rework and brings the stacked task up to date', async () => {
+    start(); await c.runtime.settle();
+    await approveAll();
+    const model = byTitle('Модель данных'); const api = byTitle('API');
+    expect(api.status).toBe('verify');
+    const reworked: string[] = [];
+    c.runner.scripts.developer = async (w, call) => { if (w.reason === 'base_changed') { reworked.push(w.payload.taskId as string); await call('executor_rework', { task_id: w.payload.taskId, text: 'Подтяни базовую ветку' }); } };
+    const dev = c.team.agent(model.assigneeId!);
+
+    // the testers found a defect in the lower task: it goes back to the executor
+    await c.team.exec.rework(model.id, dev.id, 'Исправь дефект');
+    expect(c.team.task(model.id).status).toBe('in_progress');
+    expect(c.team.task(api.id).staleBase).toBe(true);
+    await c.runtime.settle();
+    expect(reworked).toEqual([]);            // nothing to pull yet: the base is still being reworked
+
+    c.executor.finish(model.executorRef!);
+    await c.team.exec.sync(); await c.runtime.settle();
+    expect(reworked).toEqual([api.id]);
+    expect(c.team.task(api.id)).toMatchObject({ staleBase: false, status: 'in_progress' });
+    expect(run('API').reworks[0]).toContain(`git merge ${model.branch}`);
+  });
+});

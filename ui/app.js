@@ -311,13 +311,14 @@ function taskNode(t) {
   const assignee = h('select', { onchange: (e) => e.target.value && act('PATCH', `/tasks/${t.id}`, { assigneeId: e.target.value }) }, h('option', { value: '' }, t.takenOver ? 'у владельца' : 'не назначена'), S.agents.map((a) => h('option', { value: a.id, selected: a.id === t.assigneeId }, a.alias)));
   const cps = S.checkpoints.filter((c) => c.taskId === t.id && (c.status === 'open' || c.status === 'proposed'));
   return [h('div', { class: 'card' }, h('div', { class: 'row top' }, h('div', { class: 'grow' }, h('b', {}, t.title), ' ', h('span', { class: `chip ${STATUS_CHIP[t.status] || ''}` }, STATUS_RU[t.status]), t.status === 'open' && !t.ready ? h('span', { class: 'chip', style: 'margin-left:4px' }, 'ждёт зависимости') : null,
-      t.externalKey ? h('span', { class: 'chip acc', style: 'margin-left:4px' }, t.externalKey) : null, t.takenOver ? h('span', { class: 'chip warn', style: 'margin-left:4px' }, 'забрал владелец') : null),
+      t.externalKey ? h('span', { class: 'chip acc', style: 'margin-left:4px' }, t.externalKey) : null, t.takenOver ? h('span', { class: 'chip warn', style: 'margin-left:4px' }, 'забрал владелец') : null, t.staleBase ? h('span', { class: 'chip bad', style: 'margin-left:4px' }, 'базовая ветка изменилась') : null),
       status, assignee, !t.takenOver ? h('button', { onclick: () => act('PATCH', `/tasks/${t.id}`, { takeOver: true }, 'Задача у тебя') }, 'Забрать себе') : null),
     t.description ? h('details', {}, h('summary', {}, 'Описание'), h('div', { class: 'pre' }, t.description)) : null,
     h('div', { class: 'small muted', style: 'margin-top:6px' }, [
       t.dependsOn.length ? `Зависит от: ${t.dependsOn.map((id) => task(id)?.title ?? id).join(', ')}` : null,
       t.intake ? `Входной контроль: ${t.intake.ready ? 'пройден' : `пробелов ${t.intake.gaps.length}`}${t.intake.gaps.length ? ` (${t.intake.gaps.map((g) => `${g.what}: ${g.resolution === 'self' ? 'сам' : 'нужен человек'}`).join('; ')})` : ''}` : null,
-      t.executorRef ? `Исполнитель: ${t.executorRef}, ${t.executorStatus}` : null, cps.length ? `Чекпоинт у техлида: ${cps.map((c) => c.title).join(', ')}` : null, t.obsoleteReason ? `Неактуальна: ${t.obsoleteReason}` : null,
+      t.executorRef ? `Исполнитель: ${t.executorRef}, ${t.executorStatus}${t.branch ? `, ветка ${t.branch}` : ''}` : null,
+      t.baseTaskId ? `Начата от ветки задачи: ${task(t.baseTaskId)?.title ?? t.baseTaskId}` : null, cps.length ? `Чекпоинт у техлида: ${cps.map((c) => c.title).join(', ')}` : null, t.obsoleteReason ? `Неактуальна: ${t.obsoleteReason}` : null,
     ].filter(Boolean).map((line) => h('div', {}, line)), t.prUrl ? h('div', {}, h('a', { href: t.prUrl, target: '_blank' }, t.prUrl)) : null)),
   kids.length ? h('div', { class: 'tree' }, kids.map(taskNode)) : null];
 }

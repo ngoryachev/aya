@@ -8,20 +8,23 @@ import { ensureBasics } from '../src/seed.js';
 
 /** An executor whose tasks stop at scripted checkpoints and finish when those are answered. */
 export class FakeExecutor implements Executor {
-  tasks = new Map<string, { prompt: string; title: string; status: string; prUrl: string | null; pending: ExecutorCheckpoint[]; answers: { ref: string; response: CheckpointResponse }[] }>();
+  tasks = new Map<string, { prompt: string; title: string; baseBranch: string | null; reworks: string[]; status: string; prUrl: string | null; pending: ExecutorCheckpoint[]; answers: { ref: string; response: CheckpointResponse }[] }>();
   /** Checkpoints every new task goes through, in order. */
   plan: Omit<ExecutorCheckpoint, 'ref'>[] = [{ kind: 'approve_plan', title: 'Утвердить план', summary: 'План готов', payload: { planMd: '1. сделать' }, allowed: ['approve', 'request_changes', 'abort'] }];
   private n = 0;
-  async start(input: { repoPath: string; title: string; prompt: string }) {
+  async start(input: { repoPath: string; title: string; prompt: string; baseBranch?: string | null }) {
     const ref = `x${++this.n}`;
-    this.tasks.set(ref, { prompt: input.prompt, title: input.title, status: this.plan.length ? 'waiting_hil' : 'pr_open', prUrl: this.plan.length ? null : `https://example.test/pr/${this.n}`, pending: this.plan.map((c, i) => ({ ...c, ref: `${ref}-h${i}` })), answers: [] });
+    this.tasks.set(ref, { prompt: input.prompt, title: input.title, baseBranch: input.baseBranch ?? null, reworks: [], status: this.plan.length ? 'waiting_hil' : 'pr_open', prUrl: this.plan.length ? null : `https://example.test/pr/${this.n}`, pending: this.plan.map((c, i) => ({ ...c, ref: `${ref}-h${i}` })), answers: [] });
     return { ref };
   }
   async state(ref: string): Promise<ExecutorState> {
     const t = this.tasks.get(ref)!;
     const ok = t.status === 'pr_open'; const terminal = ok || t.status === 'failed' || t.status === 'aborted';
-    return { status: t.status, terminal, ok, prUrl: t.prUrl, url: null, checkpoints: t.pending.slice(0, 1) };
+    return { status: t.status, terminal, ok, prUrl: t.prUrl, url: null, branch: `aya/${ref}`, checkpoints: t.pending.slice(0, 1) };
   }
+  async rework(ref: string, text: string) { const t = this.tasks.get(ref)!; t.reworks.push(text); t.status = 'running'; t.prUrl = null; }
+  /** The executor finishes a reworked task. */
+  finish(ref: string) { const t = this.tasks.get(ref)!; t.status = 'pr_open'; t.prUrl = `https://example.test/pr/${ref}`; }
   async answer(checkpointRef: string, response: CheckpointResponse) {
     for (const [ref, t] of this.tasks) {
       if (t.pending[0]?.ref !== checkpointRef) continue;

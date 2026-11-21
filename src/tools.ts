@@ -34,7 +34,7 @@ function taskView(team: Team, t: Task) {
   return {
     id: t.id, title: t.title, status: t.status, ready: team.isReady(t), assignee: t.assigneeId ? team.agent(t.assigneeId).alias : null, priority: t.priority,
     parent: t.parentId, depends_on: team.deps(t.id), external_key: t.externalKey, executor: t.executorRef ? { ref: t.executorRef, status: t.executorStatus } : null,
-    pr_url: t.prUrl, intake: t.intake, package: t.packageId, taken_over_by_owner: t.takenOver || undefined,
+    pr_url: t.prUrl, branch: t.branch ?? undefined, stacked_on: t.baseTaskId ?? undefined, base_moved: t.staleBase || undefined, intake: t.intake, package: t.packageId, taken_over_by_owner: t.takenOver || undefined,
   };
 }
 
@@ -207,6 +207,11 @@ export const TOOLS: ToolDef[] = [
     handler: async ({ team, agent }, a) => { const t = team.task(a.task_id); if (t.assigneeId !== agent.id) throw new TeamError('задача назначена не тебе'); return { task: taskView(team, await team.exec.start(a.task_id, agent.id, a.prompt, a.pipeline)), next: 'Исполнитель работает. Заверши ход: тебя разбудят, когда он закончит.' }; },
   },
   {
+    name: 'executor_rework', description: 'Вернуть уже сделанную задачу исполнителю на доработку, сохранив сделанное: дефекты от тестировщиков, замечания, или базовая ветка изменилась (base_moved). text: что именно исправить.',
+    schema: { task_id: z.string(), text: z.string() },
+    handler: async ({ team, agent }, a) => { const t = team.task(a.task_id); if (t.assigneeId !== agent.id) throw new TeamError('задача назначена не тебе'); return { task: taskView(team, await team.exec.rework(a.task_id, agent.id, a.text)), next: 'Исполнитель дорабатывает. Заверши ход.' }; },
+  },
+  {
     name: 'executor_status', description: 'Что происходит с задачей у исполнителя.',
     schema: { task_id: z.string() },
     handler: ({ team }, a) => { const t = team.task(a.task_id); return { executor: t.executorRef, status: t.executorStatus, pr_url: t.prUrl, open_checkpoints: team.exec.checkpoints(t.projectId).filter((c) => c.taskId === t.id && (c.status === 'open' || c.status === 'proposed')).map((c) => ({ id: c.id, title: c.title, status: c.status })) }; },
@@ -266,7 +271,7 @@ export const ROLE_TOOLS: Record<string, string[]> = {
   pm: [...COMMON, 'task_create', 'task_update', 'task_mark_obsolete', 'tracker_list', 'tracker_update', 'package_create', 'package_mark_sent', 'package_result'],
   techlead: [...COMMON, 'task_create', 'task_assign', 'task_update', 'checkpoint_get', 'checkpoint_answer', 'decision_decide', 'executor_status'],
   architect: [...COMMON, 'task_create', 'decision_decide'],
-  developer: [...COMMON, 'task_create', 'task_update', 'task_intake', 'executor_start', 'executor_status'],
+  developer: [...COMMON, 'task_create', 'task_update', 'task_intake', 'executor_start', 'executor_rework', 'executor_status'],
 };
 
 export function toolsFor(roleName: string, override: string[]): ToolDef[] {

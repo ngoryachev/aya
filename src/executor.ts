@@ -7,17 +7,20 @@ import type { Checkpoint, Decider, Decision, DecisionClass, Task } from './types
 import { SYSTEM, TeamError, type Team } from './team.js';
 
 export interface ExecutorCheckpoint { ref: string; kind: string; title: string; summary: string; payload: unknown; allowed: string[] }
-export interface ExecutorState { status: string; terminal: boolean; ok: boolean; prUrl: string | null; url: string | null; checkpoints: ExecutorCheckpoint[] }
+export interface ExecutorState { status: string; terminal: boolean; ok: boolean; prUrl: string | null; url: string | null; branch: string | null; checkpoints: ExecutorCheckpoint[] }
 export interface CheckpointResponse { decision: string; comment?: string; answers?: Record<string, string>; edited?: { prompt?: string; planMd?: string; title?: string } }
 
 /** Whatever actually does the coding work. sdlc today; the team layer only knows this interface. */
 export interface Executor {
-  start(input: { repoPath: string; title: string; prompt: string; pipeline?: string | null }): Promise<{ ref: string }>;
+  /** `baseBranch`: start the work from this branch instead of the repository's main one (stacked work). */
+  start(input: { repoPath: string; title: string; prompt: string; pipeline?: string | null; baseBranch?: string | null }): Promise<{ ref: string }>;
   state(ref: string): Promise<ExecutorState>;
   answer(checkpointRef: string, response: CheckpointResponse): Promise<void>;
+  /** Send finished work back to be changed, keeping what is already done. */
+  rework(ref: string, text: string): Promise<void>;
 }
 
-interface SdlcTask { id: string; status: string; prUrl: string | null }
+interface SdlcTask { id: string; status: string; prUrl: string | null; branch: string | null }
 interface SdlcHil { id: string; kind: string; title: string; summary: string; payload: unknown; allowedDecisions: string[]; status: string }
 
 export class SdlcExecutor implements Executor {
@@ -41,8 +44,10 @@ export class SdlcExecutor implements Executor {
     return j as T;
   }
 
-  async start(input: { repoPath: string; title: string; prompt: string; pipeline?: string | null }) {
-    const t = await this.call<SdlcTask>('POST', '/tasks', { repoPath: input.repoPath, prompt: input.prompt, title: input.title, pipeline: input.pipeline ?? undefined, modelOverrides: this.model ? { '*': { model: this.model } } : undefined });
+  async start(input: { repoPath: string; title: string; prompt: string; pipeline?: string | null; baseBranch?: string | null }) {
+    // a base branch is another task's local branch: no remote in front of it
+    const base = input.baseBranch ? { baseBranch: input.baseBranch, baseRemote: null } : {};
+    const t = await this.call<SdlcTask>('POST', '/tasks', { repoPath: input.repoPath, prompt: input.prompt, title: input.title, pipeline: input.pipeline ?? undefined, ...base, modelOverrides: this.model ? { '*': { model: this.model } } : undefined });
     return { ref: t.id };
   }
 
@@ -51,10 +56,12 @@ export class SdlcExecutor implements Executor {
     const s = r.task.status;
     const ok = ['pr_open', 'succeeded', 'merged'].includes(s);
     const terminal = ok || ['failed', 'aborted', 'closed'].includes(s);
-    return { status: s, terminal, ok, prUrl: r.task.prUrl, url: `${this.base}/tasks/${ref}`, checkpoints: r.openHil.map((h) => ({ ref: h.id, kind: h.kind, title: h.title, summary: h.summary, payload: h.payload, allowed: h.allowedDecisions })) };
+    return { status: s, terminal, ok, prUrl: r.task.prUrl, branch: r.task.branch ?? null, url: `${this.base}/tasks/${ref}`, checkpoints: r.openHil.map((h) => ({ ref: h.id, kind: h.kind, title: h.title, summary: h.summary, payload: h.payload, allowed: h.allowedDecisions })) };
   }
 
   async answer(checkpointRef: string, response: CheckpointResponse) { await this.call('POST', `/hil/${checkpointRef}/respond`, response); }
+
+  async rework(ref: string, text: string) { await this.call('POST', `/tasks/${ref}/request-changes`, { text }); }
 }
 
 const DECISION_LABELS: Record<string, string> = {
@@ -99,8 +106,12 @@ export class ExecutorSync {
     if (t.executorRef && !dead) throw new TeamError(`задача уже у исполнителя (${t.executorRef})`);
     if (!team.isReady(t) && !(dead && (t.status === 'blocked' || t.status === 'in_progress'))) throw new TeamError('задача заблокирована зависимостями или уже не открыта');
     if (!p.repoPath) throw new TeamError('у проекта не задан репозиторий');
-    const { ref } = await this.forProject(p.id).start({ repoPath: p.repoPath, title: t.title, prompt, pipeline: pipeline ?? p.pipeline });
-    team.db.update('tasks', t.id, { executorRef: ref, executorStatus: 'created', updatedAt: now() });
+    const base = team.stackBase(t);
+    if (base === undefined) throw new TeamError('задача зависит от нескольких незавершённых задач, которые не выстроены в цепочку: подожди, пока хотя бы одна из них будет слита');
+    if (base && !base.branch) throw new TeamError(`у задачи-зависимости «${base.title}» ещё не известна ветка: повтори позже`);
+    const { ref } = await this.forProject(p.id).start({ repoPath: p.repoPath, title: t.title, prompt, pipeline: pipeline ?? p.pipeline, baseBranch: base?.branch ?? null });
+    team.db.update('tasks', t.id, { executorRef: ref, executorStatus: 'created', baseTaskId: base?.id ?? null, staleBase: false, branch: null, updatedAt: now() });
+    if (base) team.emit({ type: 'executor.stacked', projectId: p.id, actor: SYSTEM, taskId: t.id, summary: `«${t.title}» стартует от ветки задачи «${base.title}» (${base.branch})`, payload: { baseTaskId: base.id, baseBranch: base.branch } });
     team.emit({ type: 'executor.started', projectId: p.id, actor: { kind: 'agent', id: agentId }, taskId: t.id, summary: `«${t.title}» ${dead ? 'заново ' : ''}передана исполнителю (${p.executor}: ${ref})`, payload: { ref, pipeline: pipeline ?? p.pipeline } });
     team.setTaskStatus(t.id, 'in_progress', { kind: 'agent', id: agentId });
     return team.task(t.id);
@@ -116,8 +127,8 @@ export class ExecutorSync {
         let st: ExecutorState;
         try { st = await this.forProject(t.projectId).state(t.executorRef!); }
         catch (e) { team.emit({ type: 'executor.error', projectId: t.projectId, actor: SYSTEM, taskId: t.id, summary: `Исполнитель не отвечает: ${e instanceof Error ? e.message : String(e)}` }); continue; }
-        if (st.status !== t.executorStatus || (st.prUrl && st.prUrl !== t.prUrl)) {
-          team.db.update('tasks', t.id, { executorStatus: st.status, prUrl: st.prUrl ?? t.prUrl, updatedAt: now() });
+        if (st.status !== t.executorStatus || (st.prUrl && st.prUrl !== t.prUrl) || (st.branch && st.branch !== t.branch)) {
+          team.db.update('tasks', t.id, { executorStatus: st.status, prUrl: st.prUrl ?? t.prUrl, branch: st.branch ?? t.branch, updatedAt: now() });
           team.emit({ type: 'executor.status', projectId: t.projectId, actor: SYSTEM, taskId: t.id, summary: `Исполнитель: «${t.title}» — ${st.status}`, payload: { status: st.status, prUrl: st.prUrl, url: st.url } });
         }
         const open = new Set(st.checkpoints.map((c) => c.ref));
@@ -144,6 +155,20 @@ export class ExecutorSync {
       }
       team.decisions.escalateStale();
     } finally { this.busy = false; }
+  }
+
+  /** Finished work goes back to the executor with a request: defects from the testers, or a base branch that moved. */
+  async rework(taskId: string, agentId: string, text: string): Promise<Task> {
+    const { team } = this; const t = team.task(taskId);
+    if (!t.executorRef) throw new TeamError('задача ещё не была у исполнителя: используй executor_start');
+    if (t.status !== 'verify' && t.status !== 'blocked' && t.status !== 'in_progress') throw new TeamError(`задача в статусе ${t.status}: доработка невозможна`);
+    const base = t.baseTaskId ? team.db.get<Task>('tasks', t.baseTaskId) : undefined;
+    const full = t.staleBase && base?.branch ? `${text}\n\nБазовая ветка ${base.branch} изменилась после начала работы. Сначала подтяни её изменения в рабочую ветку (git merge ${base.branch}) и разреши конфликты.` : text;
+    await this.forProject(t.projectId).rework(t.executorRef, full);
+    team.db.update('tasks', t.id, { staleBase: false, executorStatus: 'running', updatedAt: now() });
+    team.emit({ type: 'executor.rework', projectId: t.projectId, actor: { kind: 'agent', id: agentId }, taskId: t.id, summary: `«${t.title}» возвращена исполнителю на доработку`, payload: { text } });
+    team.setTaskStatus(t.id, 'in_progress', { kind: 'agent', id: agentId }, 'доработка');
+    return team.task(t.id);
   }
 
   /** The tech lead's answer to a checkpoint is itself a decision candidate and goes through the decision cycle. */

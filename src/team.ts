@@ -120,7 +120,21 @@ export class Team {
   /** A task can be worked on when everything it depends on is finished (or no longer relevant). */
   isReady(t: Task): boolean {
     if (t.status !== 'open') return false;
-    return this.deps(t.id).every((d) => { const s = this.db.get<Task>('tasks', d)?.status; return s === 'done' || s === 'verify' || s === 'obsolete' || s === 'cancelled' || s === undefined; });
+    const ok = this.deps(t.id).every((d) => { const s = this.db.get<Task>('tasks', d)?.status; return s === 'done' || s === 'verify' || s === 'obsolete' || s === 'cancelled' || s === undefined; });
+    return ok && this.stackBase(t) !== undefined;
+  }
+
+  /**
+   * Stacked work: a task whose dependency is finished by the executor but not merged yet starts from that dependency's
+   * branch instead of waiting for a human to merge. A branch has one base, so with several such dependencies one of
+   * them must already contain the others (they form a chain). Returns the task to start from, null when the main
+   * branch will do, undefined when the dependencies do not form a chain yet and the task has to wait.
+   */
+  stackBase(t: Task): Task | null | undefined {
+    const pending = this.deps(t.id).map((d) => this.db.get<Task>('tasks', d)).filter((d): d is Task => !!d && d.status === 'verify');
+    if (!pending.length) return null;
+    const chain = (x: Task) => { const ids = new Set<string>(); for (let cur: Task | undefined = x, i = 0; cur && i < 50; i++) { ids.add(cur.id); cur = cur.baseTaskId ? this.db.get<Task>('tasks', cur.baseTaskId) : undefined; } return ids; };
+    return pending.find((top) => { const ids = chain(top); return pending.every((p) => ids.has(p.id)); });
   }
 
   createTask(input: { projectId: string; title: string; description?: string; parentId?: string | null; dependsOn?: string[]; assigneeId?: string | null; externalKey?: string | null; externalUrl?: string | null; priority?: number }, by: Actor): Task {
@@ -131,7 +145,7 @@ export class Team {
       id: newId('t'), projectId: p.id, parentId: input.parentId ?? null, title: input.title.trim(), description: input.description ?? '',
       status: 'open', assigneeId: null, createdBy: by.kind === 'agent' ? by.id! : by.kind, priority: input.priority ?? 0,
       externalKey: input.externalKey ?? null, externalUrl: input.externalUrl ?? null, intake: null, executorRef: null, executorStatus: null, prUrl: null,
-      obsoleteReason: null, packageId: null, takenOver: false, createdAt: now(), updatedAt: now(),
+      obsoleteReason: null, packageId: null, takenOver: false, branch: null, baseTaskId: null, staleBase: false, createdAt: now(), updatedAt: now(),
     };
     if (!t.title) throw new TeamError('у задачи должен быть заголовок');
     this.db.insert('tasks', t);
@@ -175,6 +189,17 @@ export class Team {
         if (this.isReady(d) && d.assigneeId) this.wake(d.assigneeId, 'task_assigned', { taskId: d.id }, `task:${d.id}`);
       }
       this.notifyUnassigned(t.projectId);
+    }
+    // a finished task went back to rework: whatever was started from its branch is now behind
+    if (t.status === 'verify' && (status === 'open' || status === 'in_progress' || status === 'blocked')) {
+      for (const d of this.db.all<Task>('tasks', "base_task_id = ? AND status NOT IN ('done','obsolete','cancelled')", t.id)) {
+        this.db.update('tasks', d.id, { staleBase: true });
+        this.emit({ type: 'task.base_moved', projectId: t.projectId, actor: SYSTEM, taskId: d.id, summary: `«${d.title}» стоит на ветке задачи «${t.title}», которая ушла на доработку`, payload: { baseTaskId: t.id } });
+      }
+    }
+    // …and came back: the tasks stacked on it can be brought up to date
+    if (status === 'verify') {
+      for (const d of this.db.all<Task>('tasks', 'base_task_id = ? AND stale_base = 1', t.id)) if (d.assigneeId) this.wake(d.assigneeId, 'base_changed', { taskId: d.id, baseTaskId: t.id }, `base:${d.id}`);
     }
     // finished by the executor: the PM gathers such tasks into packages for the human testers
     if (status === 'verify') { const pm = this.pm(t.projectId); if (pm) this.wake(pm.id, 'tasks_to_package', {}, 'package'); }

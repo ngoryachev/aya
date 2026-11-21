@@ -177,6 +177,7 @@ export class Runtime {
       case 'checkpoint': { const c = team.db.get<Checkpoint>('checkpoints', p.checkpointId)!; const t = team.task(c.taskId); return `Исполнитель остановился на чекпоинте ${c.id} (вид: ${c.kind}) по задаче ${t.id} «${t.title}».\n${c.summary}\n\nИзучи материалы (checkpoint_get) и ответь (checkpoint_answer). Твой ответ пройдёт цикл решений.`; }
       case 'executor_finished': { const t = team.task(p.taskId); return `Исполнитель закончил задачу ${t.id} «${t.title}» (${p.status}).${p.prUrl ? ` PR: ${p.prUrl}` : ''} Задача переведена в verify и ждёт приёмки. Если по итогам есть что сообщить техлиду или записать в память, сделай это.`; }
       case 'executor_failed': { const t = team.task(p.taskId); return `Исполнитель не справился с задачей ${t.id} «${t.title}» (${p.status}). Задача заблокирована. Разберись в причине (executor_status) и сообщи техлиду (agent_message), что нужно для продолжения.`; }
+      case 'base_changed': { const t = team.task(p.taskId); const b = team.task(p.baseTaskId); return `Твоя задача ${t.id} «${t.title}» начата от ветки задачи «${b.title}», а та была доработана. Верни свою задачу исполнителю (executor_rework), чтобы он подтянул изменения базовой ветки и проверил, что всё по-прежнему работает.`; }
       case 'owner_note': return `Сообщение от владельца${p.taskId ? ` по задаче ${p.taskId}` : ''}:\n\n${p.text}`;
       default: return `${w.reason}: ${JSON.stringify(p)}`;
     }
@@ -187,5 +188,5 @@ export const REASON_TITLES: Record<string, string> = {
   project_started: 'старт проекта', external_issue: 'задача из трекера', tasks_to_assign: 'назначение задач', task_assigned: 'новая задача', task_blocked: 'задача заблокирована',
   tasks_to_package: 'сбор пакета', dependents_review: 'пересмотр зависимых задач', decision_to_decide: 'принять решение', decision_send_package: 'пакет решения эксперту',
   decision_resolved: 'решение принято', decision_overridden: 'решение изменено владельцем', message_reply: 'ответ эксперта', message_rejected: 'сообщение отклонено',
-  agent_message: 'сообщение от коллеги', checkpoint: 'чекпоинт исполнителя', executor_finished: 'исполнитель закончил', executor_failed: 'исполнитель не справился', owner_note: 'сообщение владельца',
+  agent_message: 'сообщение от коллеги', base_changed: 'базовая ветка изменилась', checkpoint: 'чекпоинт исполнителя', executor_finished: 'исполнитель закончил', executor_failed: 'исполнитель не справился', owner_note: 'сообщение владельца',
 };

@@ -56,6 +56,12 @@ export interface Task {
   intake: { ready: boolean; gaps: IntakeGap[]; at: string } | null;
   executorRef: string | null; executorStatus: string | null; prUrl: string | null;
   obsoleteReason: string | null; packageId: string | null; takenOver: boolean;
+  /** The executor's branch with this task's work. */
+  branch: string | null;
+  /** The unfinished dependency whose branch this task was started from (stacked work). */
+  baseTaskId: string | null;
+  /** The base went back to rework after this task was started from it: the work must be brought up to date. */
+  staleBase: boolean;
   createdAt: string; updatedAt: string;
 }
 

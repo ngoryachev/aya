@@ -74,6 +74,12 @@ const MIGRATIONS: string[] = [
   CREATE INDEX idx_wakeups_agent ON wakeups(agent_id, status);
   CREATE INDEX idx_events_project ON events(project_id, id);
   `,
+  // stacked work: a task remembers its branch, the task whose branch it was started from, and whether that base moved since
+  `
+  ALTER TABLE tasks ADD COLUMN branch TEXT;
+  ALTER TABLE tasks ADD COLUMN base_task_id TEXT;
+  ALTER TABLE tasks ADD COLUMN stale_base INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** Columns stored as JSON text / as 0-1 integers, per table. Everything else is passed through. */
@@ -85,7 +91,7 @@ const JSON_COLS: Record<string, string[]> = {
   packages: ['task_ids'], wakeups: ['payload'], tracker_issues: ['comments'], events: ['payload'],
 };
 const BOOL_COLS: Record<string, string[]> = {
-  personas: ['substitute_on', 'is_owner'], tasks: ['taken_over'],
+  personas: ['substitute_on', 'is_owner'], tasks: ['taken_over', 'stale_base'],
   decisions: ['reversible', 'proposed_pivotal', 'pivotal', 'by_substitute', 'needs_review', 'reviewed'],
   messages: ['edited'], style_lessons: ['active'], approval_rules: ['require_approval'],
 };
