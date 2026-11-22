@@ -23,6 +23,7 @@ export class FakeExecutor implements Executor {
     return { status: t.status, terminal, ok, prUrl: t.prUrl, url: null, branch: `aya/${ref}`, checkpoints: t.pending.slice(0, 1) };
   }
   async rework(ref: string, text: string) { const t = this.tasks.get(ref)!; t.reworks.push(text); t.status = 'running'; t.prUrl = null; }
+  async land(ref: string) { const t = this.tasks.get(ref)!; if (t.status !== 'pr_open') throw new Error(`task is ${t.status}`); t.status = 'merged'; }
   /** The executor finishes a reworked task. */
   finish(ref: string) { const t = this.tasks.get(ref)!; t.status = 'pr_open'; t.prUrl = `https://example.test/pr/${ref}`; }
   async answer(checkpointRef: string, response: CheckpointResponse) {

@@ -145,7 +145,7 @@ export class Team {
       id: newId('t'), projectId: p.id, parentId: input.parentId ?? null, title: input.title.trim(), description: input.description ?? '',
       status: 'open', assigneeId: null, createdBy: by.kind === 'agent' ? by.id! : by.kind, priority: input.priority ?? 0,
       externalKey: input.externalKey ?? null, externalUrl: input.externalUrl ?? null, intake: null, executorRef: null, executorStatus: null, prUrl: null,
-      obsoleteReason: null, packageId: null, takenOver: false, branch: null, baseTaskId: null, staleBase: false, createdAt: now(), updatedAt: now(),
+      obsoleteReason: null, packageId: null, takenOver: false, branch: null, baseTaskId: null, staleBase: false, merged: false, createdAt: now(), updatedAt: now(),
     };
     if (!t.title) throw new TeamError('у задачи должен быть заголовок');
     this.db.insert('tasks', t);
@@ -201,8 +201,12 @@ export class Team {
     if (status === 'verify') {
       for (const d of this.db.all<Task>('tasks', 'base_task_id = ? AND stale_base = 1', t.id)) if (d.assigneeId) this.wake(d.assigneeId, 'base_changed', { taskId: d.id, baseTaskId: t.id }, `base:${d.id}`);
     }
+    // work stacked on an accepted task has finished: the lead can merge what was waiting for it
+    if (status === 'verify' && this.project(t.projectId).mergeBy === 'techlead' && this.tasks(t.projectId).some((x) => x.status === 'done' && x.executorRef && !x.merged)) { const lead = this.lead(t.projectId); if (lead) this.wake(lead.id, 'tasks_to_land', {}, 'land'); }
     // finished by the executor: the PM gathers such tasks into packages for the human testers
     if (status === 'verify') { const pm = this.pm(t.projectId); if (pm) this.wake(pm.id, 'tasks_to_package', {}, 'package'); }
+    // accepted work is merged by the tech lead when the owner delegated merging
+    if (status === 'done' && t.executorRef && !t.merged && this.project(t.projectId).mergeBy === 'techlead') { const lead = this.lead(t.projectId); if (lead) this.wake(lead.id, 'tasks_to_land', {}, 'land'); }
     if (status === 'blocked') { const lead = this.lead(t.projectId); if (lead && lead.id !== by.id) this.wake(lead.id, 'task_blocked', { taskId: t.id, note }, `blocked:${t.id}`); }
     return this.task(t.id);
   }

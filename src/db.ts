@@ -80,6 +80,11 @@ const MIGRATIONS: string[] = [
   ALTER TABLE tasks ADD COLUMN base_task_id TEXT;
   ALTER TABLE tasks ADD COLUMN stale_base INTEGER NOT NULL DEFAULT 0;
   `,
+  // merging: who does it (the owner by default, or the tech lead when the owner delegates), and what is already merged
+  `
+  ALTER TABLE projects ADD COLUMN merge_by TEXT NOT NULL DEFAULT 'owner';
+  ALTER TABLE tasks ADD COLUMN merged INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** Columns stored as JSON text / as 0-1 integers, per table. Everything else is passed through. */
@@ -91,7 +96,7 @@ const JSON_COLS: Record<string, string[]> = {
   packages: ['task_ids'], wakeups: ['payload'], tracker_issues: ['comments'], events: ['payload'],
 };
 const BOOL_COLS: Record<string, string[]> = {
-  personas: ['substitute_on', 'is_owner'], tasks: ['taken_over', 'stale_base'],
+  personas: ['substitute_on', 'is_owner'], tasks: ['taken_over', 'stale_base', 'merged'],
   decisions: ['reversible', 'proposed_pivotal', 'pivotal', 'by_substitute', 'needs_review', 'reviewed'],
   messages: ['edited'], style_lessons: ['active'], approval_rules: ['require_approval'],
 };

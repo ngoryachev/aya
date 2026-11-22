@@ -44,6 +44,8 @@ export interface Project {
   executor: string; pipeline: string | null; trackerProject: string | null;
   policy: ContentPolicy; status: 'active' | 'paused'; memory: string;
   budgetUsd: number | null; createdAt: string;
+  /** Who merges accepted work: the owner, or the tech lead when the owner delegated it. */
+  mergeBy: 'owner' | 'techlead';
 }
 
 export const TASK_STATUSES = ['open', 'in_progress', 'blocked', 'verify', 'done', 'cancelled', 'obsolete'] as const;
@@ -62,6 +64,8 @@ export interface Task {
   baseTaskId: string | null;
   /** The base went back to rework after this task was started from it: the work must be brought up to date. */
   staleBase: boolean;
+  /** The work is merged into the branch it was based on. */
+  merged: boolean;
   createdAt: string; updatedAt: string;
 }
 

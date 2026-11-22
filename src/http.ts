@@ -114,12 +114,12 @@ export function createHttpApp(team: Team, runtime: Runtime) {
 
   // ------------------------------------------------------------------ projects, personas, agents
   app.post('/api/projects', async (c) => {
-    const b = z.object({ name: z.string().min(1), goal: z.string(), repoPath: z.string().nullable().optional(), executor: z.string().optional(), pipeline: z.string().nullable().optional(), trackerProject: z.string().nullable().optional(), budgetUsd: z.number().positive().nullable().optional(), start: z.boolean().optional() }).parse(await c.req.json());
+    const b = z.object({ name: z.string().min(1), goal: z.string(), repoPath: z.string().nullable().optional(), executor: z.string().optional(), pipeline: z.string().nullable().optional(), trackerProject: z.string().nullable().optional(), budgetUsd: z.number().positive().nullable().optional(), mergeBy: z.enum(['owner', 'techlead']).optional(), start: z.boolean().optional() }).parse(await c.req.json());
     if (b.repoPath && !fs.existsSync(b.repoPath)) throw new TeamError(`каталог ${b.repoPath} не найден`);
     return c.json(createProject(team, b), 201);
   });
   app.patch('/api/projects/:id', async (c) => {
-    const b = z.object({ status: z.enum(['active', 'paused']).optional(), goal: z.string().optional(), budgetUsd: z.number().positive().nullable().optional(), pipeline: z.string().nullable().optional(), trackerProject: z.string().nullable().optional(), policy: z.object({ denyPatterns: z.array(z.string()), maxChars: z.number().int().positive(), allowCode: z.boolean() }).optional() }).parse(await c.req.json());
+    const b = z.object({ status: z.enum(['active', 'paused']).optional(), mergeBy: z.enum(['owner', 'techlead']).optional(), goal: z.string().optional(), budgetUsd: z.number().positive().nullable().optional(), pipeline: z.string().nullable().optional(), trackerProject: z.string().nullable().optional(), policy: z.object({ denyPatterns: z.array(z.string()), maxChars: z.number().int().positive(), allowCode: z.boolean() }).optional() }).parse(await c.req.json());
     const p = team.project(c.req.param('id'));
     const { status, ...rest } = b;
     if (Object.keys(rest).length) { team.db.update('projects', p.id, rest); team.emit({ type: 'project.updated', projectId: p.id, actor: OWNER, summary: `Проект изменён: ${Object.keys(rest).join(', ')}`, payload: rest }); }
@@ -166,6 +166,8 @@ export function createHttpApp(team: Team, runtime: Runtime) {
     else if (b.status) team.setTaskStatus(t.id, b.status, OWNER, b.note);
     return c.json(team.task(t.id));
   });
+
+  app.post('/api/tasks/:id/land', async (c) => c.json(await team.exec.land(c.req.param('id'), OWNER)));
 
   // ------------------------------------------------------------------ decisions
   app.post('/api/decisions/:id/classify', async (c) => c.json(team.decisions.classify(c.req.param('id'), z.object({ pivotal: z.boolean(), decider, klass: klass.optional(), note: z.string().optional(), chosen: z.string().optional(), comment: z.string().optional() }).parse(await c.req.json()))));

@@ -40,7 +40,7 @@ const DEFAULT_TEAM: { alias: string; role: string; boss?: string }[] = [
 
 export interface ProjectInput {
   name: string; goal: string; repoPath?: string | null; executor?: string; pipeline?: string | null; trackerProject?: string | null;
-  budgetUsd?: number | null; team?: { alias: string; role: string; boss?: string }[]; start?: boolean;
+  budgetUsd?: number | null; mergeBy?: 'owner' | 'techlead'; team?: { alias: string; role: string; boss?: string }[]; start?: boolean;
 }
 
 /** A project with its team: PM, tech lead, architect, two developers of one full-stack role. */
@@ -48,7 +48,7 @@ export function createProject(team: Team, input: ProjectInput): Project {
   ensureBasics(team);
   const p: Project = {
     id: newId('prj'), name: input.name.trim(), goal: input.goal, repoPath: input.repoPath ?? null, executor: input.executor ?? 'sdlc', pipeline: input.pipeline ?? null,
-    trackerProject: input.trackerProject ?? null, policy: { denyPatterns: [], maxChars: 4000, allowCode: false }, status: 'active', memory: '', budgetUsd: input.budgetUsd ?? null, createdAt: now(),
+    trackerProject: input.trackerProject ?? null, policy: { denyPatterns: [], maxChars: 4000, allowCode: false }, status: 'active', memory: '', budgetUsd: input.budgetUsd ?? null, createdAt: now(), mergeBy: input.mergeBy ?? 'owner',
   };
   if (!p.name) throw new TeamError('у проекта должно быть название');
   team.db.insert('projects', p);

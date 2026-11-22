@@ -9,12 +9,13 @@ import { SdkRunner } from './sdk-runner.js';
 import { SdlcExecutor, type Executor } from './executor.js';
 import { createHttpApp, ensureToken } from './http.js';
 import { ensureBasics } from './seed.js';
+import { OwnerNotifier, TelegramTarget } from './notify.js';
 
 function arg(name: string, def?: string): string | undefined { const i = process.argv.indexOf(`--${name}`); return i >= 0 ? process.argv[i + 1] : def; }
 
 async function main() {
   const cmd = process.argv[2] ?? 'serve';
-  if (cmd !== 'serve') { console.log('usage: aya serve [--port 7450] [--host 127.0.0.1] [--home ~/.aya] [--model <id>]'); process.exit(cmd === 'help' ? 0 : 1); }
+  if (cmd !== 'serve') { console.log('usage: aya serve [--port 7450] [--host 127.0.0.1] [--home ~/.aya] [--model <id>] [--telegram sdlc] [--public-url <url>]'); process.exit(cmd === 'help' ? 0 : 1); }
   const home = arg('home', process.env.AYA_HOME ?? path.join(os.homedir(), '.aya'))!;
   const port = Number(arg('port', process.env.AYA_PORT ?? '7450'));
   const host = arg('host', process.env.AYA_HOST ?? '127.0.0.1')!;
@@ -26,6 +27,13 @@ async function main() {
   ensureBasics(team);
   const runtime = new Runtime(team, new SdkRunner(), { defaultModel: arg('model', process.env.AYA_MODEL) ?? null });
   const app = createHttpApp(team, runtime);
+  // notifications outside the console: an own bot (AYA_TELEGRAM_TOKEN + AYA_TELEGRAM_CHAT), or the one sdlc already uses (--telegram sdlc)
+  const tg = arg('telegram', process.env.AYA_TELEGRAM);
+  const publicUrl = arg('public-url', process.env.AYA_PUBLIC_URL) ?? `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
+  try {
+    const target = tg === 'sdlc' ? TelegramTarget.fromSdlc() : process.env.AYA_TELEGRAM_TOKEN && process.env.AYA_TELEGRAM_CHAT ? new TelegramTarget(process.env.AYA_TELEGRAM_TOKEN, process.env.AYA_TELEGRAM_CHAT) : null;
+    if (target) { new OwnerNotifier(team, target, publicUrl); console.log(`[aya] telegram notifications: on${tg === 'sdlc' ? ' (the sdlc bot)' : ''}`); }
+  } catch (e) { console.warn(`[aya] telegram notifications are off: ${e instanceof Error ? e.message : String(e)}`); }
   runtime.recover();
   team.exec.startTicker(Number(process.env.AYA_SYNC_MS ?? 5000));
 

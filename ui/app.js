@@ -88,6 +88,7 @@ function render() {
     p ? h('span', { class: `chip ${p.status === 'active' ? 'ok' : 'warn'}` }, p.status === 'active' ? 'идёт' : 'на паузе') : null,
     p ? h('button', { onclick: () => act('PATCH', `/projects/${p.id}`, { status: p.status === 'active' ? 'paused' : 'active' }) }, p.status === 'active' ? 'Пауза' : 'Возобновить') : null,
     h('span', { class: 'spacer' }),
+    p ? h('label', { class: 'inline' }, 'Сливает:', h('select', { onchange: (e) => act('PATCH', `/projects/${p.id}`, { mergeBy: e.target.value }, 'Изменено') }, h('option', { value: 'owner', selected: p.mergeBy === 'owner' }, 'я сам'), h('option', { value: 'techlead', selected: p.mergeBy === 'techlead' }, 'техлид'))) : null,
     p ? h('button', { onclick: () => act('POST', '/sync', {}, 'Сверено с исполнителем') }, 'Сверить с исполнителем') : null,
     h('button', { onclick: () => { route = 'new'; render(); } }, 'Новый проект'),
   );
@@ -311,8 +312,9 @@ function taskNode(t) {
   const assignee = h('select', { onchange: (e) => e.target.value && act('PATCH', `/tasks/${t.id}`, { assigneeId: e.target.value }) }, h('option', { value: '' }, t.takenOver ? 'у владельца' : 'не назначена'), S.agents.map((a) => h('option', { value: a.id, selected: a.id === t.assigneeId }, a.alias)));
   const cps = S.checkpoints.filter((c) => c.taskId === t.id && (c.status === 'open' || c.status === 'proposed'));
   return [h('div', { class: 'card' }, h('div', { class: 'row top' }, h('div', { class: 'grow' }, h('b', {}, t.title), ' ', h('span', { class: `chip ${STATUS_CHIP[t.status] || ''}` }, STATUS_RU[t.status]), t.status === 'open' && !t.ready ? h('span', { class: 'chip', style: 'margin-left:4px' }, 'ждёт зависимости') : null,
-      t.externalKey ? h('span', { class: 'chip acc', style: 'margin-left:4px' }, t.externalKey) : null, t.takenOver ? h('span', { class: 'chip warn', style: 'margin-left:4px' }, 'забрал владелец') : null, t.staleBase ? h('span', { class: 'chip bad', style: 'margin-left:4px' }, 'базовая ветка изменилась') : null),
-      status, assignee, !t.takenOver ? h('button', { onclick: () => act('PATCH', `/tasks/${t.id}`, { takeOver: true }, 'Задача у тебя') }, 'Забрать себе') : null),
+      t.externalKey ? h('span', { class: 'chip acc', style: 'margin-left:4px' }, t.externalKey) : null, t.takenOver ? h('span', { class: 'chip warn', style: 'margin-left:4px' }, 'забрал владелец') : null, t.staleBase ? h('span', { class: 'chip bad', style: 'margin-left:4px' }, 'базовая ветка изменилась') : null, t.merged ? h('span', { class: 'chip ok', style: 'margin-left:4px' }, 'слита') : null),
+      status, assignee, t.executorRef && !t.merged && (t.status === 'verify' || t.status === 'done') ? h('button', { onclick: () => act('POST', `/tasks/${t.id}/land`, {}, 'Слито') }, 'Слить') : null,
+      !t.takenOver ? h('button', { onclick: () => act('PATCH', `/tasks/${t.id}`, { takeOver: true }, 'Задача у тебя') }, 'Забрать себе') : null),
     t.description ? h('details', {}, h('summary', {}, 'Описание'), h('div', { class: 'pre' }, t.description)) : null,
     h('div', { class: 'small muted', style: 'margin-top:6px' }, [
       t.dependsOn.length ? `Зависит от: ${t.dependsOn.map((id) => task(id)?.title ?? id).join(', ')}` : null,

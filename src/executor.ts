@@ -4,7 +4,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { newId, now } from './db.js';
 import type { Checkpoint, Decider, Decision, DecisionClass, Task } from './types.js';
-import { SYSTEM, TeamError, type Team } from './team.js';
+import { SYSTEM, TeamError, type Actor, type Team } from './team.js';
 
 export interface ExecutorCheckpoint { ref: string; kind: string; title: string; summary: string; payload: unknown; allowed: string[] }
 export interface ExecutorState { status: string; terminal: boolean; ok: boolean; prUrl: string | null; url: string | null; branch: string | null; checkpoints: ExecutorCheckpoint[] }
@@ -18,6 +18,8 @@ export interface Executor {
   answer(checkpointRef: string, response: CheckpointResponse): Promise<void>;
   /** Send finished work back to be changed, keeping what is already done. */
   rework(ref: string, text: string): Promise<void>;
+  /** Merge the finished work into the branch it was based on. Work stacked on it is moved onto that branch. */
+  land(ref: string): Promise<void>;
 }
 
 interface SdlcTask { id: string; status: string; prUrl: string | null; branch: string | null }
@@ -62,6 +64,8 @@ export class SdlcExecutor implements Executor {
   async answer(checkpointRef: string, response: CheckpointResponse) { await this.call('POST', `/hil/${checkpointRef}/respond`, response); }
 
   async rework(ref: string, text: string) { await this.call('POST', `/tasks/${ref}/request-changes`, { text }); }
+
+  async land(ref: string) { await this.call('POST', `/tasks/${ref}/land`, {}); }
 }
 
 const DECISION_LABELS: Record<string, string> = {
@@ -169,6 +173,28 @@ export class ExecutorSync {
     team.db.update('tasks', t.id, { staleBase: false, executorStatus: 'running', updatedAt: now() });
     team.emit({ type: 'executor.rework', projectId: t.projectId, actor: { kind: 'agent', id: agentId }, taskId: t.id, summary: `«${t.title}» возвращена исполнителю на доработку`, payload: { text } });
     team.setTaskStatus(t.id, 'in_progress', { kind: 'agent', id: agentId }, 'доработка');
+    return team.task(t.id);
+  }
+
+  /**
+   * Merge a task's work. The owner may do it at any moment; the tech lead only when the owner delegated merging,
+   * and only work the testers accepted. A stack is merged from the bottom up.
+   */
+  async land(taskId: string, by: Actor): Promise<Task> {
+    const { team } = this; const t = team.task(taskId); const p = team.project(t.projectId);
+    if (!t.executorRef) throw new TeamError('у задачи нет работы исполнителя: сливать нечего');
+    if (t.merged) throw new TeamError('задача уже слита');
+    if (by.kind === 'agent') {
+      if (p.mergeBy !== 'techlead') throw new TeamError('владелец не делегировал слияние: сливает он сам');
+      if (t.status !== 'done') throw new TeamError(`задача в статусе ${t.status}: сливать можно только принятые тестировщиками задачи (done)`);
+    } else if (t.status !== 'done' && t.status !== 'verify') throw new TeamError(`задача в статусе ${t.status}: сливать можно задачи на приёмке или принятые`);
+    const base = t.baseTaskId ? team.db.get<Task>('tasks', t.baseTaskId) : undefined;
+    if (base && !base.merged && base.status !== 'obsolete' && base.status !== 'cancelled') throw new TeamError(`сначала слей задачу «${base.title}» (${base.id}): эта начата от её ветки`);
+    const busy = team.db.all<Task>('tasks', "base_task_id = ? AND status = 'in_progress'", t.id);
+    if (busy.length) throw new TeamError(`на ветке этой задачи ещё работает исполнитель: ${busy.map((b) => `«${b.title}»`).join(', ')}. Слей её, когда они закончат: тебя разбудят.`);
+    await this.forProject(p.id).land(t.executorRef);
+    team.db.update('tasks', t.id, { merged: true, executorStatus: 'merged', updatedAt: now() });
+    team.emit({ type: 'task.merged', projectId: p.id, actor: by, taskId: t.id, summary: `«${t.title}» слита (${team.actorName(by)})`, payload: { ref: t.executorRef, branch: t.branch } });
     return team.task(t.id);
   }
 

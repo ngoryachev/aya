@@ -475,3 +475,34 @@ describe('no silent stalls', () => {
     expect(c.team.nudgeStalled(undefined, undefined, later + 3_600_000)).toHaveLength(0);
   });
 });
+
+describe('merging', () => {
+  const approveAll = async () => { for (let i = 0; i < 6; i++) { await c.team.exec.sync(); await c.runtime.settle(); for (const d of candidates()) c.team.decisions.classify(d.id, { pivotal: false, decider: { kind: 'self' } }); await c.runtime.settle(); } };
+
+  it('stays with the owner unless delegated, and the lead merges accepted work bottom-up', async () => {
+    start(); await c.runtime.settle();
+    await approveAll();
+    const [model, api] = tasks(); const lead = { kind: 'agent' as const, id: c.team.lead(project.id)!.id };
+    await expect(c.team.exec.land(model!.id, lead)).rejects.toThrow(/не делегировал/);
+
+    c.db.update('projects', project.id, { mergeBy: 'techlead' });
+    await expect(c.team.exec.land(model!.id, lead)).rejects.toThrow(/только принятые/);       // not accepted by the testers yet
+    const landed: string[] = [];
+    const prev = c.runner.scripts.techlead!;
+    c.runner.scripts.techlead = async (w, call, spec) => { if (w.reason === 'tasks_to_land') { for (const t of (await call('task_list', { status: 'done' })).filter((x: any) => !x.merged)) { const r = await call('task_land', { task_id: t.id }); if (r.task) landed.push(t.id); } return; } await prev(w, call, spec); };
+    // the upper task is accepted first: it cannot be merged before its base
+    c.team.setTaskStatus(api!.id, 'done', { kind: 'owner' }); await c.runtime.settle();
+    expect(landed).toEqual([]);
+    expect(c.runner.calls('task_land').at(-1)!.result).toMatch(/сначала слей/);
+    c.team.setTaskStatus(model!.id, 'done', { kind: 'owner' }); await c.runtime.settle();
+    expect(landed).toEqual([model!.id, api!.id]);
+    expect(tasks().slice(0, 2).every((t) => t.merged && t.executorStatus === 'merged')).toBe(true);
+  });
+
+  it('lets the owner merge work that is still with the testers', async () => {
+    start(); await c.runtime.settle();
+    await approveAll();
+    const t = await c.team.exec.land(tasks()[0]!.id, { kind: 'owner' });
+    expect(t.merged).toBe(true);
+  });
+});
