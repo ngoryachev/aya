@@ -131,7 +131,8 @@ export class Team {
    * branch will do, undefined when the dependencies do not form a chain yet and the task has to wait.
    */
   stackBase(t: Task): Task | null | undefined {
-    const pending = this.deps(t.id).map((d) => this.db.get<Task>('tasks', d)).filter((d): d is Task => !!d && d.status === 'verify');
+    // not on the main branch yet: finished by the executor, or already accepted by the testers but not merged
+    const pending = this.deps(t.id).map((d) => this.db.get<Task>('tasks', d)).filter((d): d is Task => !!d && (d.status === 'verify' || (d.status === 'done' && !!d.executorRef && !d.merged)));
     if (!pending.length) return null;
     const chain = (x: Task) => { const ids = new Set<string>(); for (let cur: Task | undefined = x, i = 0; cur && i < 50; i++) { ids.add(cur.id); cur = cur.baseTaskId ? this.db.get<Task>('tasks', cur.baseTaskId) : undefined; } return ids; };
     return pending.find((top) => { const ids = chain(top); return pending.every((p) => ids.has(p.id)); });
@@ -154,6 +155,16 @@ export class Team {
     if (input.assigneeId) this.assignTask(t.id, input.assigneeId, by);
     else this.notifyUnassigned(p.id);
     return this.task(t.id);
+  }
+
+  /** Tasks that depend on this one may have become workable: tell their assignees, and the lead about the unassigned ones. */
+  releaseDependents(taskId: string) {
+    const t = this.task(taskId);
+    for (const id of this.dependents(t.id)) {
+      const d = this.task(id);
+      if (this.isReady(d) && d.assigneeId && !d.executorRef) this.wake(d.assigneeId, 'task_assigned', { taskId: d.id }, `task:${d.id}`);
+    }
+    this.notifyUnassigned(t.projectId);
   }
 
   private notifyUnassigned(projectId: string) {
@@ -183,12 +194,7 @@ export class Team {
     this.db.update('tasks', t.id, { status, updatedAt: now() });
     this.emit({ type: 'task.status', projectId: t.projectId, actor: by, taskId: t.id, summary: `«${t.title}»: ${t.status} → ${status}${note ? ` (${note})` : ''}`, payload: { from: t.status, to: status, note } });
     if (status === 'done' || status === 'verify' || status === 'obsolete' || status === 'cancelled') {
-      // dependents may have become workable: tell their assignees, and the lead about the unassigned ones
-      for (const id of this.dependents(t.id)) {
-        const d = this.task(id);
-        if (this.isReady(d) && d.assigneeId) this.wake(d.assigneeId, 'task_assigned', { taskId: d.id }, `task:${d.id}`);
-      }
-      this.notifyUnassigned(t.projectId);
+      this.releaseDependents(t.id);
     }
     // a finished task went back to rework: whatever was started from its branch is now behind
     if (t.status === 'verify' && (status === 'open' || status === 'in_progress' || status === 'blocked')) {

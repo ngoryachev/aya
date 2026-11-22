@@ -506,3 +506,39 @@ describe('merging', () => {
     expect(t.merged).toBe(true);
   });
 });
+
+describe('accepted but unmerged work', () => {
+  it('does not let a task start from the main branch before its dependencies are there', async () => {
+    start(); c.runner.scripts = {}; await c.runtime.settle();
+    const pm = { kind: 'agent' as const, id: c.team.pm(project.id)!.id };
+    const mk = (title: string, deps: string[] = []) => c.team.createTask({ projectId: project.id, title, description: '', dependsOn: deps }, pm);
+    const a = mk('А'); const b = mk('Б'); const readme = mk('README', [a.id, b.id]);
+    for (const [t, ref] of [[a, 'x1'], [b, 'x2']] as const) { c.executor.tasks.set(ref, { prompt: '', title: t.title, baseBranch: null, reworks: [], status: 'pr_open', prUrl: 'u', pending: [], answers: [] }); c.db.update('tasks', t.id, { status: 'done', executorRef: ref, branch: `aya/${ref}` }); }
+    expect(c.team.isReady(c.team.task(readme.id))).toBe(false);          // both accepted, neither merged: two bases
+    await c.team.exec.land(a.id, { kind: 'owner' });
+    expect(c.team.stackBase(c.team.task(readme.id))!.id).toBe(b.id);     // one left: start from its branch
+    await c.team.exec.land(b.id, { kind: 'owner' });
+    expect(c.team.stackBase(c.team.task(readme.id))).toBeNull();         // everything is on the main branch
+  });
+});
+
+describe('sessions', () => {
+  it('are continued while recent and short, then restarted with a digest of the last turns', async () => {
+    defaultScripts(c);
+    const resumes: (string | null)[] = []; const prompts: string[] = [];
+    const run = c.runner.run.bind(c.runner);
+    c.runner.run = async (spec) => { if (spec.role.name === 'pm') { resumes.push(spec.resume); prompts.push(spec.systemPrompt); } return run(spec); };
+    c.runner.scripts = {};
+    project = createProject(c.team, { name: 'Демо', goal: 'x', executor: 'fake', start: false });
+    const pm = c.team.pm(project.id)!;
+    for (let i = 0; i < 8; i++) { c.team.wake(pm.id, 'owner_note', { text: `заметка ${i}` }); await c.runtime.settle(); }
+    expect(resumes.slice(0, 7)).toEqual([null, `s-${pm.id}`, `s-${pm.id}`, `s-${pm.id}`, `s-${pm.id}`, `s-${pm.id}`, null]);   // six turns, then a new session
+    expect(prompts[0]).not.toContain('Твои последние ходы');
+    expect(prompts[1]).not.toContain('Твои последние ходы');
+    expect(prompts[6]).toContain('Твои последние ходы');
+    // a pause longer than the cache lives: a new session as well
+    c.db.run("UPDATE agent_runs SET ended_at = ? WHERE agent_id = ?", new Date(Date.now() - 10 * 60_000).toISOString(), pm.id);
+    c.team.wake(pm.id, 'owner_note', { text: 'после паузы' }); await c.runtime.settle();
+    expect(resumes.at(-1)).toBeNull();
+  });
+});

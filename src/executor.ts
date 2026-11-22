@@ -195,6 +195,7 @@ export class ExecutorSync {
     await this.forProject(p.id).land(t.executorRef);
     team.db.update('tasks', t.id, { merged: true, executorStatus: 'merged', updatedAt: now() });
     team.emit({ type: 'task.merged', projectId: p.id, actor: by, taskId: t.id, summary: `«${t.title}» слита (${team.actorName(by)})`, payload: { ref: t.executorRef, branch: t.branch } });
+    team.releaseDependents(t.id);   // what waited for this work to reach the main branch can start now
     return team.task(t.id);
   }
 
